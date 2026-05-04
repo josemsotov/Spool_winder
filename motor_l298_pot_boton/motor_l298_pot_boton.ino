@@ -2,6 +2,9 @@
 // - Potenciometro: velocidad
 // - Boton: cambio de direccion
 // Compatible con Arduino UNO y Arduino Nano (misma asignacion de pines)
+// Firmware: v1.0.0 (primera version estable)
+
+const char* FIRMWARE_VERSION = "v1.0.0";
 
 const uint8_t PIN_ENA = 5;      // PWM hacia ENA del L298N
 const uint8_t PIN_IN1 = 8;      // IN1 del L298N
@@ -10,6 +13,14 @@ const uint8_t PIN_POT = A0;     // Cursor del potenciometro
 const uint8_t PIN_BOTON = 2;    // Boton a GND (usando INPUT_PULLUP)
 
 bool direccionAdelante = true;
+bool direccionObjetivoAdelante = true;
+
+const unsigned long RAMPA_CAMBIO_MS = 8000;
+bool rampaCambioActiva = false;
+bool direccionConmutada = false;
+unsigned long inicioRampaMs = 0;
+int pwmInicioRampa = 0;
+int pwmActual = 0;
 
 // Antirrebote por software
 bool estadoBotonEstable = HIGH;
@@ -19,6 +30,8 @@ const unsigned long DEBOUNCE_MS = 35;
 
 void setup() {
   Serial.begin(9600);
+  Serial.print("SpoolWinder Firmware ");
+  Serial.println(FIRMWARE_VERSION);
   pinMode(PIN_ENA, OUTPUT);
   pinMode(PIN_IN1, OUTPUT);
   pinMode(PIN_IN2, OUTPUT);
@@ -47,8 +60,7 @@ void manejarBoton() {
 
       // Evento de pulsacion: pasa de HIGH a LOW (boton a GND)
       if (estadoBotonEstable == LOW) {
-        direccionAdelante = !direccionAdelante;
-        aplicarDireccion();
+        iniciarCambioDireccionConRampa();
       }
     }
   }
@@ -56,14 +68,42 @@ void manejarBoton() {
 
 void actualizarVelocidad() {
   int lecturaPot = analogRead(PIN_POT);   // 0..1023
-  int pwm = map(lecturaPot, 0, 1023, 0, 255);
+  int pwmObjetivo = map(lecturaPot, 0, 1023, 0, 255);
 
   // Zona muerta para evitar zumbido a muy baja velocidad
-  if (pwm < 12) {
-    pwm = 0;
+  if (pwmObjetivo < 12) {
+    pwmObjetivo = 0;
   }
 
-  analogWrite(PIN_ENA, pwm);
+  if (!rampaCambioActiva) {
+    pwmActual = pwmObjetivo;
+  } else {
+    unsigned long transcurrido = millis() - inicioRampaMs;
+    unsigned long mitad = RAMPA_CAMBIO_MS / 2;
+
+    if (transcurrido >= RAMPA_CAMBIO_MS) {
+      rampaCambioActiva = false;
+      direccionConmutada = false;
+      direccionAdelante = direccionObjetivoAdelante;
+      aplicarDireccion();
+      pwmActual = pwmObjetivo;
+    } else if (transcurrido < mitad) {
+      // Primera mitad: desacelera linealmente hasta 0
+      pwmActual = (int)((long)pwmInicioRampa * (long)(mitad - transcurrido) / (long)mitad);
+    } else {
+      // Segunda mitad: cambia de direccion y acelera al nuevo objetivo
+      if (!direccionConmutada) {
+        direccionAdelante = direccionObjetivoAdelante;
+        aplicarDireccion();
+        direccionConmutada = true;
+      }
+
+      unsigned long t2 = transcurrido - mitad;
+      pwmActual = (int)((long)pwmObjetivo * (long)t2 / (long)mitad);
+    }
+  }
+
+  analogWrite(PIN_ENA, pwmActual);
 
   // DEBUG: imprime cada 300ms para no saturar el puerto serie
   static unsigned long ultimoDebug = 0;
@@ -72,10 +112,23 @@ void actualizarVelocidad() {
     Serial.print("POT=");
     Serial.print(lecturaPot);
     Serial.print("  PWM=");
-    Serial.print(pwm);
+    Serial.print(pwmActual);
     Serial.print("  DIR=");
     Serial.println(direccionAdelante ? "ADELANTE" : "ATRAS");
   }
+}
+
+void iniciarCambioDireccionConRampa() {
+  // Si ya esta haciendo rampa, ignora pulsaciones hasta terminar.
+  if (rampaCambioActiva) {
+    return;
+  }
+
+  direccionObjetivoAdelante = !direccionAdelante;
+  rampaCambioActiva = true;
+  direccionConmutada = false;
+  inicioRampaMs = millis();
+  pwmInicioRampa = pwmActual;
 }
 
 void aplicarDireccion() {
