@@ -1,0 +1,25 @@
+# OS / editor noise
+.DS_Store
+Thumbs.db
+*.tmp
+*.swp
+
+# VS Code local settings
+.vscode/*
+!.vscode/extensions.json
+
+# Arduino CLI / build artifacts
+build/
+out/
+*.elf
+*.hex
+*.bin
+*.map
+*.eep
+*.lss
+*.lst
+*.o
+*.d
+
+# Logs
+*.log
